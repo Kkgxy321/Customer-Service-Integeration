@@ -1,0 +1,145 @@
+// server.js
+require('dotenv').config();
+const express = require('express');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
+const { Sequelize, DataTypes } = require('sequelize');
+const Intercom = require('intercom-client');
+
+const app = express();
+app.use(express.json());
+
+// MySQL Connection
+const sequelize = new Sequelize(process.env.MYSQL_URI);
+
+// Define User model
+const User = sequelize.define('User', {
+  googleId: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  displayName: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  email: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+});
+
+// Define ServiceRequest model
+const ServiceRequest = sequelize.define('ServiceRequest', {
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+  },
+  category: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  comments: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  intercomId: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+});
+
+// Sync models with the database
+sequelize.sync();
+
+// Intercom client
+const intercomClient = new Intercom.Client({ token: process.env.INTERCOM_ACCESS_TOKEN });
+
+// Configure Passport with Google strategy
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: '/auth/google/callback'
+},
+  async (token, tokenSecret, profile, done) => {
+    let user = await User.findOne({ where: { googleId: profile.id } });
+    if (!user) {
+      user = await User.create({
+        googleId: profile.id,
+        displayName: profile.displayName,
+        email: profile.emails[0].value,
+      });
+    }
+    done(null, user);
+  }
+));
+
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  const user = await User.findByPk(id);
+  done(null, user);
+});
+
+app.use(session({ secret: 'secret', resave: false, saveUninitialized: false }));
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Google OAuth Routes
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/' }),
+  (req, res) => {
+    res.redirect('/');
+  }
+);
+
+// Middleware to check if user is authenticated
+const isAuthenticated = (req, res, next) => {
+  if (req.isAuthenticated()) {
+    return next();
+  }
+  res.redirect('/auth/google');
+};
+
+// Submit customer service request
+app.post('/api/service-request', isAuthenticated, async (req, res) => {
+  const { category, comments } = req.body;
+  const intercomResponse = await intercomClient.messages.create({
+    message_type: 'inbox',
+    body: comments,
+    from: {
+      type: 'user',
+      id: req.user.id,
+    }
+  });
+  const serviceRequest = await ServiceRequest.create({
+    userId: req.user.id,
+    category,
+    comments,
+    intercomId: intercomResponse.id,
+  });
+  res.status(201).json(serviceRequest);
+});
+
+// Get customer service requests by category
+app.get('/api/service-requests/:category', isAuthenticated, async (req, res) => {
+  const requests = await ServiceRequest.findAll({
+    where: {
+      userId: req.user.id,
+      category: req.params.category,
+    },
+  });
+  res.status(200).json(requests);
+});
+
+// Start the server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
