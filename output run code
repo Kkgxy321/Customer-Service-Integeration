@@ -1,0 +1,6 @@
+cd customer-service-backend
+node server.js
+
+
+cd customer-service-frontend
+npm start
