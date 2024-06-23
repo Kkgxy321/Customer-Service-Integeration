@@ -1,0 +1,87 @@
+// src/App.js
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Route, Switch, Redirect } from 'react-router-dom';
+import axios from 'axios';
+import GoogleLogin from 'react-google-login';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [requests, setRequests] = useState([]);
+
+  const handleLogin = async (response) => {
+    const { tokenId } = response;
+    const result = await axios.post('/auth/google', { id_token: tokenId });
+    setUser(result.data);
+  };
+
+  const fetchRequests = async (category) => {
+    const result = await axios.get(`/api/service-requests/${category}`);
+    setRequests(result.data);
+  };
+
+  return (
+    <Router>
+      <div>
+        {!user ? (
+          <GoogleLogin
+            clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}
+            buttonText="Login with Google"
+            onSuccess={handleLogin}
+            onFailure={(err) => console.log(err)}
+          />
+        ) : (
+          <>
+            <h1>Welcome, {user.displayName}</h1>
+            <Switch>
+              <Route path="/submit-request">
+                <SubmitRequestForm user={user} />
+              </Route>
+              <Route path="/requests/:category" render={({ match }) => {
+                fetchRequests(match.params.category);
+                return <RequestsList requests={requests} />;
+              }} />
+              <Redirect from="/" to="/submit-request" />
+            </Switch>
+          </>
+        )}
+      </div>
+    </Router>
+  );
+};
+
+const SubmitRequestForm = ({ user }) => {
+  const [category, setCategory] = useState('');
+  const [comments, setComments] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await axios.post('/api/service-request', { category, comments }, { headers: { Authorization: `Bearer ${user.token}` } });
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <option value="">Select Category</option>
+        <option value="General Queries">General Queries</option>
+        <option value="Product Features Queries">Product Features Queries</option>
+        <option value="Product Pricing Queries">Product Pricing Queries</option>
+        <option value="Product Feature Implementation Requests">Product Feature Implementation Requests</option>
+      </select>
+      <textarea value={comments} onChange={(e) => setComments(e.target.value)} />
+      <button type="submit">Submit</button>
+    </form>
+  );
+};
+
+const RequestsList = ({ requests }) => (
+  <ul>
+    {requests.map(request => (
+      <li key={request.id}>
+        <p>{request.category}</p>
+        <p>{request.comments}</p>
+      </li>
+    ))}
+  </ul>
+);
+
+export default App;
